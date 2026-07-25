@@ -26,20 +26,22 @@ const skipRaycast = (...args: [Raycaster, Intersection[]]) => {
   void args;
 };
 
-function applyWave(
-  origin: { value: { set: (x: number, y: number, z: number) => unknown } },
-  age: { value: number },
-  strength: { value: number },
-  wave: { origin: readonly [number, number, number]; age: number; strength: number } | undefined,
+/**
+ * Upload the compacted live waves. Only the first `liveWaveCount` slots are read
+ * by the shader loop, so stale data past that point is inert and does not need
+ * clearing — writing it would be pure waste at 120 Hz.
+ */
+function uploadWaves(
+  ripple: ReturnType<typeof createJellyOrbMaterial>["ripple"],
+  snapshot: (typeof organismController)["snapshot"],
 ) {
-  if (!wave) {
-    age.value = 999;
-    strength.value = 0;
-    return;
+  const count = Math.min(snapshot.liveWaveCount, ripple.slots.length);
+  for (let index = 0; index < count; index += 1) {
+    const wave = snapshot.liveWaves[index]!;
+    ripple.slots[index]!.set(wave.origin[0], wave.origin[1], wave.origin[2], wave.strength);
+    ripple.ages[index] = wave.age;
   }
-  origin.value.set(wave.origin[0], wave.origin[1], wave.origin[2]);
-  age.value = wave.age;
-  strength.value = wave.strength;
+  ripple.liveCount.value = count;
 }
 
 export function JellyOrb() {
@@ -83,7 +85,11 @@ export function JellyOrb() {
 
     uniforms.phase.value = snapshot.phase;
     uniforms.motionScale.value = reducedMotion ? REDUCED_MOTION_SCALE : 1;
-    uniforms.squash.value = snapshot.strain;
+    // Bulk strain plus the fast surface-tension mode. Summing them here routes
+    // the skin through volumeScaleFromStrain's volume-preserving axial/perpendicular
+    // split, which makes it the l=2 quadrupole — the right oscillation mode for an
+    // incompressible droplet — without costing a single shader instruction.
+    uniforms.squash.value = snapshot.strain + snapshot.skin;
     uniforms.jiggle.value.set(...snapshot.axis);
     uniforms.bend.value.set(...snapshot.bend);
     uniforms.slosh.value.set(...snapshot.slosh);
@@ -94,10 +100,7 @@ export function JellyOrb() {
     uniforms.secondaryContactPressure.value = snapshot.secondaryContactPressure * visualScale;
     uniforms.pointer.value.set(...snapshot.pointer);
 
-    applyWave(uniforms.rippleOrigin0, uniforms.rippleAge0, uniforms.rippleStrength0, snapshot.surfaceWaves[0]);
-    applyWave(uniforms.rippleOrigin1, uniforms.rippleAge1, uniforms.rippleStrength1, snapshot.surfaceWaves[1]);
-    applyWave(uniforms.rippleOrigin2, uniforms.rippleAge2, uniforms.rippleStrength2, snapshot.surfaceWaves[2]);
-    applyWave(uniforms.rippleOrigin3, uniforms.rippleAge3, uniforms.rippleStrength3, snapshot.surfaceWaves[3]);
+    uploadWaves(uniforms.ripple, snapshot);
 
     uniforms.speed.value = 0.22 + energy * 0.2;
     uniforms.tension.value = 0.34 + visualEnergy * 0.46 + visualResonance * 0.12;

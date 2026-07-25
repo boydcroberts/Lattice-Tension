@@ -38,6 +38,7 @@ import {
   modelWorldMatrixInverse,
 } from 'three/tsl';
 import { RaymarchingBox } from 'three/examples/jsm/tsl/utils/Raymarching.js';
+import { createRippleField } from './rippleField';
 
 /**
  * A raymarched water-glass organism. It consumes the modal controller snapshot:
@@ -80,52 +81,18 @@ export function createJellyOrbMaterial(steps: number) {
   const stepCount = uniform(steps);
   const animationPhase = phase.mul(motionScale);
 
-  // Fluid memory: a 4-slot ring buffer of the last touches. Each slot is a
-  // direction on the orb (where the touch landed) + how long ago it fired.
-  // Age is accumulated on the CPU side every frame (JellyOrb.tsx), not from
-  // shader `time`, so it stays correct regardless of when the material was
-  // created relative to the renderer's own clock. An untouched slot sits at
-  // a large age forever — its contribution underflows to exactly 0 below,
-  // so idle orbs pay only the (cheap) uniform reads, no visible cost.
-  const rippleOrigin0 = uniform(new Vector3(0, 0, 1));
-  const rippleAge0 = uniform(999);
-  const rippleStrength0 = uniform(0);
-  const rippleOrigin1 = uniform(new Vector3(0, 0, 1));
-  const rippleAge1 = uniform(999);
-  const rippleStrength1 = uniform(0);
-  const rippleOrigin2 = uniform(new Vector3(0, 0, 1));
-  const rippleAge2 = uniform(999);
-  const rippleStrength2 = uniform(0);
-  const rippleOrigin3 = uniform(new Vector3(0, 0, 1));
-  const rippleAge3 = uniform(999);
-  const rippleStrength3 = uniform(0);
+  // Fluid memory: a ring buffer of the last touches, each a direction on the orb
+  // (where the touch landed) plus how long ago it fired. Age is accumulated on the
+  // CPU side every frame (JellyOrb.tsx), not from shader `time`, so it stays
+  // correct regardless of when the material was created relative to the renderer's
+  // own clock. The controller compacts live waves to the front and publishes the
+  // count, so an idle orb loops zero times and the ripple sum genuinely costs
+  // nothing — see rippleField.ts.
+  const ripple = createRippleField();
 
   // gyroid field — the hidden geometry suspended inside the jelly
   const gyroid = (x: ReturnType<typeof vec3>) =>
     sin(x.x).mul(cos(x.y)).add(sin(x.y).mul(cos(x.z))).add(sin(x.z).mul(cos(x.x)));
-
-  // A single traveling wavefront: an expanding ring (front = age * speed)
-  // that fades both with age and with distance from the current front, so
-  // it reads as a ring crossing the surface rather than a ripple that fills
-  // the whole orb at once. Summing four of these lets old and new touches
-  // genuinely interfere — real superposition, not a fake blend.
-  const rippleWave = (
-    dir: ReturnType<typeof vec3>,
-    origin: ReturnType<typeof vec3>,
-    age: ReturnType<typeof float>,
-    strength: ReturnType<typeof float>,
-  ) => {
-    // Great-circle distance makes a wave travel around the membrane at a
-    // constant angular speed instead of accelerating across the far side.
-    const dist = acos(max(float(-1), min(float(1), dot(dir, origin))));
-    // A wave needs enough travel time to reach the far hemisphere before its
-    // controller-side memory expires, otherwise a release reads as a local flash.
-    const front = age.mul(0.78);
-    const delta = dist.sub(front);
-    const envelope = exp(age.mul(0.3).add(delta.mul(delta).mul(34)).negate());
-    const wave = sin(dist.mul(10.5).sub(age.mul(3.0)));
-    return wave.mul(envelope).mul(strength);
-  };
 
   const map = (p: ReturnType<typeof vec3>) => {
     // Volume-preserving axial strain. These are inverse scales because an SDF
@@ -227,11 +194,7 @@ export function createJellyOrbMaterial(steps: number) {
     // (~12·0.03 per ring) inside what the sphere-trace already tolerates
     // from the domain warps — 0.05 caused overstep risk at crossing fronts.
     const rippleDir = p.div(max(length(p), float(1e-4)));
-    const ripple = rippleWave(rippleDir, rippleOrigin0, rippleAge0, rippleStrength0)
-      .add(rippleWave(rippleDir, rippleOrigin1, rippleAge1, rippleStrength1))
-      .add(rippleWave(rippleDir, rippleOrigin2, rippleAge2, rippleStrength2))
-      .add(rippleWave(rippleDir, rippleOrigin3, rippleAge3, rippleStrength3))
-      .mul(0.034);
+    const rippleDisplacement = ripple.rippleSum(rippleDir).mul(0.034);
     const contactDistance = acos(
       max(float(-1), min(float(1), dot(rippleDir, contactOrigin))),
     );
@@ -253,7 +216,7 @@ export function createJellyOrbMaterial(steps: number) {
       .sub(surfaceQuiver)
       .sub(gelatinSwell)
       .sub(pulse.mul(0.05))
-      .sub(ripple)
+      .sub(rippleDisplacement)
       .add(contactDimple)
       .add(secondaryContactDimple);
   };
@@ -799,18 +762,13 @@ export function createJellyOrbMaterial(steps: number) {
 
         // Fluid memory made visible: recompute the ripple field ONCE at the
         // hit point (the march already paid for the displacement per-step;
-        // this shading term is at-hit only, 4 waves per pixel). Crests emit
+        // this shading term is at-hit only, live waves per pixel). Crests emit
         // light like lit water — without this the rings exist but read as a
         // faint dent; with it a click leaves a glowing wake and crossings
         // flare where two rings superpose. Bloom (threshold 0.92) lifts a
         // fresh crest into a soft flash for free.
         const rippleHitDir = p.div(max(length(p), float(1e-4)));
-        const crest = abs(
-          rippleWave(rippleHitDir, rippleOrigin0, rippleAge0, rippleStrength0)
-            .add(rippleWave(rippleHitDir, rippleOrigin1, rippleAge1, rippleStrength1))
-            .add(rippleWave(rippleHitDir, rippleOrigin2, rippleAge2, rippleStrength2))
-            .add(rippleWave(rippleHitDir, rippleOrigin3, rippleAge3, rippleStrength3)),
-        ).toVar();
+        const crest = abs(ripple.rippleSum(rippleHitDir)).toVar();
         // Spectral tension is tied to the same modes that alter the silhouette:
         // cyan follows elongated poles, violet pools under direct compression,
         // and a restrained orchid band appears only while the mass is twisting.
@@ -1020,17 +978,6 @@ export function createJellyOrbMaterial(steps: number) {
     secondaryContactOrigin,
     secondaryContactPressure,
     stepCount,
-    rippleOrigin0,
-    rippleAge0,
-    rippleStrength0,
-    rippleOrigin1,
-    rippleAge1,
-    rippleStrength1,
-    rippleOrigin2,
-    rippleAge2,
-    rippleStrength2,
-    rippleOrigin3,
-    rippleAge3,
-    rippleStrength3,
+    ripple,
   };
 }

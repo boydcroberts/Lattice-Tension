@@ -58,6 +58,128 @@ describe("JellyDynamics", () => {
     expect(Math.abs(jelly.state.torsionVelocity)).toBeLessThan(0.005);
   });
 
+  it("resists a fast pull more than a slow one to the same displacement", () => {
+    // Same final displacement, different approach speed. Shear thickening means
+    // the fast path should reach a smaller strain, not the same one.
+    const pullTo = (dragRate: number) => {
+      const jelly = new JellyDynamics();
+      let peak = 0;
+      for (let frame = 0; frame < 120; frame += 1) {
+        jelly.advance(1 / 120, {
+          ...idleInput,
+          dragging: true,
+          dragX: 0.4,
+          dragY: 0,
+          dragRate,
+        });
+        peak = Math.max(peak, Math.abs(jelly.state.strain));
+      }
+      return peak;
+    };
+
+    const slow = pullTo(0);
+    const fast = pullTo(4.5);
+
+    expect(fast).toBeLessThan(slow);
+    expect(fast).toBeGreaterThan(0);
+  });
+
+  it("keeps the shear-rate response frame-rate independent", () => {
+    const run = (fps: number) => {
+      const jelly = new JellyDynamics();
+      for (let frame = 0; frame < fps; frame += 1) {
+        jelly.advance(1 / fps, {
+          ...idleInput,
+          dragging: true,
+          dragX: 0.35,
+          dragY: 0.1,
+          dragRate: 3.2,
+        });
+      }
+      return jelly.state;
+    };
+
+    const at30 = run(30);
+    const at60 = run(60);
+    const at120 = run(120);
+
+    expect(at30.shearRate).toBeCloseTo(at120.shearRate, 4);
+    expect(at30.strain).toBeCloseTo(at60.strain, 4);
+    expect(at60.strain).toBeCloseTo(at120.strain, 4);
+  });
+
+  it("stays finite under sustained maximum-rate input", () => {
+    const jelly = new JellyDynamics();
+    for (let frame = 0; frame < 120 * 10; frame += 1) {
+      jelly.advance(1 / 120, {
+        ...idleInput,
+        dragging: true,
+        dragX: 0.7,
+        dragY: -0.7,
+        dragRate: 99,
+        contactStrength: 1,
+        squeeze: 0.8,
+        twist: 1.1,
+      });
+    }
+
+    const { state } = jelly;
+    for (const value of [
+      state.strain,
+      state.strainVelocity,
+      state.torsion,
+      state.contactPressure,
+      state.kineticEnergy,
+      state.shearRate,
+      ...state.bend,
+      ...state.slosh,
+    ]) {
+      expect(Number.isFinite(value)).toBe(true);
+    }
+    // Rate is clamped before it reaches the material, however large the input.
+    expect(state.shearRate).toBeLessThanOrEqual(5);
+    expect(Math.abs(state.strain)).toBeLessThanOrEqual(0.34);
+  });
+
+  it("rings the surface-tension mode above the bulk band, then settles", () => {
+    const jelly = new JellyDynamics();
+    jelly.applyImpulse([0.3, 0.8, 0.5], 1.2);
+
+    // Direction reversals, not zero crossings: the skin oscillates about a
+    // negative target (deformation always pulls it inward), so it rarely crosses
+    // zero even while ringing hard. Reversals count the oscillation itself.
+    let skinReversals = 0;
+    let strainReversals = 0;
+    let peak = 0;
+    let previousSkinVelocity = jelly.state.skinVelocity;
+    let previousStrainVelocity = jelly.state.strainVelocity;
+
+    for (let frame = 0; frame < 120; frame += 1) {
+      jelly.advance(1 / 120, idleInput);
+      const { skinVelocity, strainVelocity, skin } = jelly.state;
+      if (Math.sign(skinVelocity) !== Math.sign(previousSkinVelocity) && skinVelocity !== 0) {
+        skinReversals += 1;
+      }
+      if (Math.sign(strainVelocity) !== Math.sign(previousStrainVelocity) && strainVelocity !== 0) {
+        strainReversals += 1;
+      }
+      peak = Math.max(peak, Math.abs(skin));
+      previousSkinVelocity = skinVelocity;
+      previousStrainVelocity = strainVelocity;
+    }
+
+    // The whole point of the mode is a band separation from the bulk (~0.7 Hz).
+    expect(skinReversals).toBeGreaterThanOrEqual(4);
+    expect(skinReversals).toBeGreaterThan(strainReversals);
+    expect(peak).toBeGreaterThan(0);
+
+    // Undriven, the ring decays away rather than sustaining.
+    for (let frame = 0; frame < 120 * 3; frame += 1) {
+      jelly.advance(1 / 120, restInput);
+    }
+    expect(Math.abs(jelly.state.skin)).toBeLessThan(peak * 0.05);
+  });
+
   it("is stable across common render frame rates", () => {
     const run = (fps: number) => {
       const jelly = new JellyDynamics();

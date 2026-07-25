@@ -43,6 +43,55 @@ describe("OrganismController", () => {
     ).toBe(true);
   });
 
+  it("compacts live waves to the front and reports an accurate count", () => {
+    const controller = new OrganismController();
+    expect(controller.snapshot.liveWaveCount).toBe(0);
+
+    // Eight taps at distinct points fill every ring-buffer slot.
+    const points: Array<[number, number, number]> = [
+      [0, 0, 1],
+      [0.5, 0, 0.87],
+      [-0.5, 0, 0.87],
+      [0, 0.5, 0.87],
+      [0, -0.5, 0.87],
+      [0.35, 0.35, 0.87],
+      [-0.35, 0.35, 0.87],
+      [0.35, -0.35, 0.87],
+    ];
+    points.forEach((point, index) => {
+      controller.beginContact(point, index);
+      controller.endContact([0, 0], 0, index);
+      advance(controller, 1 / 60);
+    });
+
+    const { liveWaveCount, liveWaves } = controller.snapshot;
+    expect(liveWaveCount).toBe(8);
+    // Every reported slot must actually be live — the shader loops over exactly
+    // this range and never checks strength itself.
+    for (let index = 0; index < liveWaveCount; index += 1) {
+      expect(liveWaves[index]!.strength).toBeGreaterThan(0);
+      expect(liveWaves[index]!.age).toBeLessThan(SURFACE_WAVE_LIFETIME);
+    }
+    expect(liveWaveCount).toBeLessThanOrEqual(liveWaves.length);
+
+    // Once everything has decayed the loop should run zero times.
+    advance(controller, 6);
+    expect(controller.snapshot.liveWaveCount).toBe(0);
+  });
+
+  it("keeps surfaceWaves slot semantics for the ambient field", () => {
+    const controller = new OrganismController();
+    // SpectralStressField iterates every slot and filters by age itself.
+    expect(controller.snapshot.surfaceWaves.length).toBe(
+      controller.snapshot.liveWaves.length,
+    );
+    expect(
+      controller.snapshot.surfaceWaves.every(
+        (wave) => wave.age >= SURFACE_WAVE_LIFETIME && wave.strength === 0,
+      ),
+    ).toBe(true);
+  });
+
   it("turns a release into bounded physical energy and a recovery", () => {
     const controller = new OrganismController();
     const velocity: Vec2Tuple = [2.4, -1.6];

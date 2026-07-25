@@ -13,6 +13,19 @@ export type JellyPhysicsConfig = {
   contactDamping: number;
   torsionStiffness: number;
   torsionDamping: number;
+  /** How strongly fast deformation stiffens the material (shear thickening). */
+  shearThickening: number;
+  /** How strongly fast deformation raises viscous damping. */
+  viscousGain: number;
+  /** First-order lag on the shear-rate estimate, in 1/s. */
+  shearRateLag: number;
+  /** Hard ceiling on effective damping; explicit integration needs damping*dt < 2. */
+  dampingCeiling: number;
+  /** Surface-tension restoring stiffness. Much higher than the bulk on purpose. */
+  skinStiffness: number;
+  skinDamping: number;
+  /** How strongly total deformation drives the skin mode. */
+  skinCoupling: number;
 };
 
 export type JellyDynamicsInput = {
@@ -28,6 +41,9 @@ export type JellyDynamicsInput = {
   squeeze?: number;
   /** Signed in-plane rotation of a multi-contact group. */
   twist?: number;
+  /** Pointer speed across the surface. Drives the non-Newtonian response: the
+   * material resists fast deformation and flows under slow load. */
+  dragRate?: number;
 };
 
 export type JellyDynamicsState = {
@@ -42,6 +58,11 @@ export type JellyDynamicsState = {
   torsionVelocity: number;
   contactPressure: number;
   kineticEnergy: number;
+  /** Low-passed deformation rate. 0 at rest, rising with fast drags. */
+  shearRate: number;
+  /** Fast surface-tension mode. Rings ~3x above the bulk band. */
+  skin: number;
+  skinVelocity: number;
 };
 
 const DEFAULT_CONFIG: JellyPhysicsConfig = {
@@ -57,7 +78,21 @@ const DEFAULT_CONFIG: JellyPhysicsConfig = {
   contactDamping: 7.2,
   torsionStiffness: 14,
   torsionDamping: 4.6,
+  shearThickening: 0.42,
+  viscousGain: 0.55,
+  shearRateLag: 6.5,
+  dampingCeiling: 24,
+  // sqrt(190) ~= 13.8 rad/s ~= 2.2 Hz, about 3.2x the bulk band (sqrt(19) ~= 4.4),
+  // so the skin reads as a distinct fast shimmer rather than more of the same
+  // wobble. zeta ~= 0.087 lets it ring 1-2s. skinStiffness*dt^2 = 0.013 at the
+  // fixed 1/120 step, well inside explicit-integrator stability.
+  skinStiffness: 190,
+  skinDamping: 2.4,
+  skinCoupling: 0.16,
 };
+
+/** Pointer speed above this is treated as maximum shear; keeps the response bounded. */
+const MAX_SHEAR_RATE = 5;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
@@ -87,6 +122,9 @@ export class JellyDynamics {
     torsionVelocity: 0,
     contactPressure: 0,
     kineticEnergy: 0,
+    shearRate: 0,
+    skin: 0,
+    skinVelocity: 0,
   };
 
   private readonly config: JellyPhysicsConfig;
@@ -114,6 +152,9 @@ export class JellyDynamics {
     this.state.torsionVelocity = 0;
     this.state.contactPressure = 0;
     this.state.kineticEnergy = 0;
+    this.state.shearRate = 0;
+    this.state.skin = 0;
+    this.state.skinVelocity = 0;
     this.accumulator = 0;
     this.bendVelocity.fill(0);
     this.sloshVelocity.fill(0);
@@ -188,10 +229,32 @@ export class JellyDynamics {
     const contactStrength = clamp(input.contactStrength ?? 0, 0, 1);
     const squeeze = clamp(input.squeeze ?? 0, -0.48, 0.82);
     const twist = clamp(input.twist ?? 0, -1.1, 1.1);
+
+    // Non-Newtonian response. Real soft matter is not a linear spring: pull it
+    // slowly and it flows, yank it and it resists like a solid before releasing.
+    // The rate is low-passed with the same exp(-k*dt) form as spinDecay below so
+    // the material stays frame-rate independent, and a single jittery pointer
+    // sample cannot spike it. shearRate is 0 whenever dragRate is absent, which
+    // collapses both terms below to the original constants exactly.
+    const rateTarget = clamp(input.dragRate ?? 0, 0, MAX_SHEAR_RATE);
+    this.state.shearRate +=
+      (rateTarget - this.state.shearRate) *
+      (1 - Math.exp(-this.config.shearRateLag * dt));
+
+    const effectiveCompliance =
+      this.config.dragCompliance /
+      (1 + this.config.shearThickening * this.state.shearRate);
+    // Ceiling guards the explicit integrator: it needs damping*dt < 2, and this
+    // keeps the worst case an order of magnitude inside that bound.
+    const effectiveDamping = Math.min(
+      this.config.dampingCeiling,
+      this.config.damping * (1 + this.config.viscousGain * this.state.shearRate),
+    );
+
     const strainTarget = clamp(
       input.idleTarget * motion +
         (input.dragging
-          ? dragMagnitude * this.config.dragCompliance -
+          ? dragMagnitude * effectiveCompliance -
             contactStrength * 0.1 -
             squeeze * 0.38
           : 0),
@@ -201,7 +264,7 @@ export class JellyDynamics {
 
     const strainAcceleration =
       (strainTarget - this.state.strain) * this.config.stiffness -
-      this.state.strainVelocity * this.config.damping;
+      this.state.strainVelocity * effectiveDamping;
     this.state.strainVelocity += strainAcceleration * dt;
     this.state.strain += this.state.strainVelocity * dt;
     this.state.strain = clamp(this.state.strain, -0.22, 0.34);
@@ -259,6 +322,23 @@ export class JellyDynamics {
     this.state.torsionVelocity += torsionAcceleration * dt;
     this.state.torsion += this.state.torsionVelocity * dt;
     this.state.torsion = clamp(this.state.torsion, -0.82, 0.82);
+
+    // Surface tension: a fast, lightly-damped mode that pulls the shape back
+    // toward a sphere well above the bulk frequency. Every other mode here sits
+    // in one low band, which is what made the orb read as a single spring; this
+    // adds the second band — a quick silhouette shimmer riding the slow slosh.
+    // It is summed into the shader's axial strain (JellyOrb.tsx), so it travels
+    // through volumeScaleFromStrain and stays volume-preserving for free.
+    const deformation =
+      Math.abs(this.state.strain) +
+      length3(this.state.bend) * 0.8 +
+      Math.abs(this.state.torsion) * 0.4;
+    const skinTarget = -deformation * this.config.skinCoupling * motion;
+    const skinAcceleration =
+      (skinTarget - this.state.skin) * this.config.skinStiffness -
+      this.state.skinVelocity * this.config.skinDamping;
+    this.state.skinVelocity += skinAcceleration * dt;
+    this.state.skin += this.state.skinVelocity * dt;
 
     const spinDecay = Math.exp(-this.config.spinDamping * dt);
     this.angularVelocity[0] *= spinDecay;

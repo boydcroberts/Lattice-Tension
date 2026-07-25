@@ -22,6 +22,10 @@ export type OrganismSnapshot = Readonly<{
   phase: number;
   strain: number;
   strainVelocity: number;
+  /** Fast surface-tension mode, summed into axial strain by the renderer. */
+  skin: number;
+  /** Low-passed deformation rate driving the non-Newtonian response. */
+  shearRate: number;
   axis: Vec3Tuple;
   bend: Vec3Tuple;
   slosh: Vec3Tuple;
@@ -33,7 +37,12 @@ export type OrganismSnapshot = Readonly<{
   secondaryContactPressure: number;
   contactCount: number;
   squeeze: number;
+  /** All ring-buffer slots, live or not. Stable length; consumers filter by age. */
   surfaceWaves: readonly SurfaceWaveSample[];
+  /** The subset of `surfaceWaves` still contributing, compacted to the front.
+   * Only the first `liveWaveCount` entries are meaningful. */
+  liveWaves: readonly SurfaceWaveSample[];
+  liveWaveCount: number;
   energy: number;
   resonance: number;
   interactionId: number;
@@ -50,8 +59,12 @@ export const SURFACE_WAVE_LIFETIME = 4.5;
 
 const FIXED_STEP = 1 / 120;
 const MAX_FRAME_TIME = 1 / 15;
-const WAVE_COUNT = 4;
+/** Ring-buffer depth for touch memory. Doubled from 4 once the renderer stopped
+ * paying for dead slots — see `liveWaves` below. */
+const WAVE_COUNT = 8;
 const MAX_CONTACTS = 5;
+/** Below this a wave contributes nothing visible and is dropped from the upload. */
+const LIVE_WAVE_EPSILON = 0.004;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
@@ -123,7 +136,16 @@ export class OrganismController {
     age: SURFACE_WAVE_LIFETIME,
     strength: 0,
   }));
+  /** Preallocated compaction target — reused every step, never reallocated.
+   * No sorting: `waves` and this share a length, so the live set can never
+   * exceed capacity and there is nothing to prioritise away. */
+  private readonly liveWaves: MutableWave[] = Array.from({ length: WAVE_COUNT }, () => ({
+    origin: [0, 0, 1],
+    age: SURFACE_WAVE_LIFETIME,
+    strength: 0,
+  }));
   private accumulator = 0;
+  private liveWaveCount = 0;
   private waveCursor = 0;
   private time = 0;
   private lastWaveAt = -Infinity;
@@ -143,6 +165,8 @@ export class OrganismController {
       phase: 0,
       strain: 0,
       strainVelocity: 0,
+      skin: 0,
+      shearRate: 0,
       axis: [0, 1, 0],
       bend: [0, 0, 0],
       slosh: [0, 0, 0],
@@ -155,6 +179,8 @@ export class OrganismController {
       contactCount: 0,
       squeeze: 0,
       surfaceWaves: this.waves,
+      liveWaves: this.liveWaves,
+      liveWaveCount: 0,
       energy: 0,
       resonance: 0,
       interactionId: 0,
@@ -185,7 +211,8 @@ export class OrganismController {
     this.pendingReleases.length = 0;
     copy3(this.deformationAxis, [0, 1, 0]);
     this.waveCursor = 0;
-    this.waves.forEach((wave) => {
+    this.liveWaveCount = 0;
+    [...this.waves, ...this.liveWaves].forEach((wave) => {
       copy3(wave.origin, [0, 0, 1]);
       wave.age = SURFACE_WAVE_LIFETIME;
       wave.strength = 0;
@@ -436,15 +463,31 @@ export class OrganismController {
       contactStrength,
       squeeze: this.input.squeeze,
       twist: this.input.twist,
+      dragRate: activeVelocity,
     });
 
     let waveEnergy = 0;
+    let liveCount = 0;
     this.waves.forEach((wave) => {
       wave.age = Math.min(SURFACE_WAVE_LIFETIME, wave.age + dt);
       const life = Math.max(0, 1 - wave.age / SURFACE_WAVE_LIFETIME);
       wave.strength *= Math.exp(-dt * 0.26);
-      waveEnergy += wave.strength * life;
+      const contribution = wave.strength * life;
+      waveEnergy += contribution;
+
+      // Compact the still-contributing waves to the front so the shader can
+      // loop over exactly `liveWaveCount` slots instead of evaluating every
+      // slot unconditionally. At rest this is 0, so the ripple sum costs
+      // nothing at all — the state the orb spends most of its time in.
+      if (contribution > LIVE_WAVE_EPSILON) {
+        const target = this.liveWaves[liveCount]!;
+        copy3(target.origin, wave.origin);
+        target.age = wave.age;
+        target.strength = wave.strength;
+        liveCount += 1;
+      }
     });
+    this.liveWaveCount = liveCount;
 
     const interactionEnergy =
       state.kineticEnergy +
@@ -532,6 +575,8 @@ export class OrganismController {
       phase: number;
       strain: number;
       strainVelocity: number;
+      skin: number;
+      shearRate: number;
       axis: Vec3Tuple;
       bend: Vec3Tuple;
       slosh: Vec3Tuple;
@@ -543,6 +588,7 @@ export class OrganismController {
       secondaryContactPressure: number;
       contactCount: number;
       squeeze: number;
+      liveWaveCount: number;
       energy: number;
       resonance: number;
       interactionId: number;
@@ -556,6 +602,8 @@ export class OrganismController {
     snapshot.phase = this.time;
     snapshot.strain = state.strain;
     snapshot.strainVelocity = state.strainVelocity;
+    snapshot.skin = state.skin;
+    snapshot.shearRate = state.shearRate;
     copy3(snapshot.axis, state.axis);
     copy3(snapshot.bend, state.bend);
     copy3(snapshot.slosh, state.slosh);
@@ -572,6 +620,7 @@ export class OrganismController {
       activeContacts.length > 1 ? state.contactPressure * 0.92 : 0;
     snapshot.contactCount = activeContacts.length;
     snapshot.squeeze = this.input.squeeze;
+    snapshot.liveWaveCount = this.liveWaveCount;
     snapshot.energy = clamp(interactionEnergy, 0, 1.5);
     snapshot.resonance = this.resonance;
     snapshot.interactionId = this.interactionId;
