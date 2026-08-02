@@ -74,7 +74,8 @@ button {
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(ellipse 58% 50% at 48% 47%, rgba(8, 85, 182, 0.09), transparent 68%),
+    radial-gradient(ellipse 58% 50% at 48% 47%, rgba(8, 95, 198, 0.13), transparent 68%),
+    radial-gradient(ellipse 32% 38% at 58% 52%, rgba(84, 78, 232, 0.045), transparent 74%),
     radial-gradient(ellipse 45% 58% at 64% 27%, rgba(39, 171, 248, 0.045), transparent 72%),
     radial-gradient(ellipse 65% 64% at 50% 54%, transparent 45%, rgba(0, 3, 14, 0.26) 100%);
   mix-blend-mode: screen;

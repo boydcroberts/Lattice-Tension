@@ -12,7 +12,9 @@ function OrganismDriver() {
   const tier = useExperienceStore((state) => state.profile?.tier ?? "high");
 
   useEffect(() => {
-    organismController.setPresentationScale(tier === "low" ? 0.56 : 0.72);
+    organismController.setPresentationScale(
+      tier === "low" ? 0.58 : tier === "medium" ? 0.76 : 0.82,
+    );
   }, [tier]);
 
   useFrame((_, delta) => {

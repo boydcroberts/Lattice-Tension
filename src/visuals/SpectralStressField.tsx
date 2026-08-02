@@ -267,12 +267,15 @@ export function SpectralStressField() {
     const wavePulse = newestWave
       ? newestWave.strength * Math.sin(waveProgress * Math.PI) * motion
       : 0;
+    const ambientField =
+      (0.012 + (Math.sin(time * 0.43) * 0.5 + 0.5) * 0.008) * motion;
     const fieldEnergy = MathUtils.clamp(
       (snapshot.energy * 0.85 +
         snapshot.resonance * 0.42 +
         waveWake * 0.24 +
         Math.abs(snapshot.squeeze) * 0.46 +
-        Math.abs(snapshot.torsion) * 0.16) *
+        Math.abs(snapshot.torsion) * 0.16 +
+        ambientField) *
         visualIntensity,
       0,
       1.45,
@@ -311,7 +314,7 @@ export function SpectralStressField() {
     );
 
     if (group.current) {
-      group.current.visible = fieldEnergy > 0.018 || haloEnergy > 0.028;
+      group.current.visible = true;
       group.current.position.x =
         snapshot.position[0] +
         snapshot.slosh[0] * 0.045 +
@@ -356,12 +359,12 @@ export function SpectralStressField() {
       .lerp(SECONDARY, stretchColorStrength * 0.5)
       .lerp(TWIST_ORCHID, twistColorStrength * 0.48);
     materials.filaments.opacity = MathUtils.clamp(
-      0.008 + fieldEnergy * 0.1,
+      0.012 + fieldEnergy * 0.1,
       0,
       0.2,
     );
     materials.halos.opacity = MathUtils.clamp(
-      0.006 + haloEnergy * 0.085,
+      0.01 + haloEnergy * 0.085,
       0,
       0.16,
     );

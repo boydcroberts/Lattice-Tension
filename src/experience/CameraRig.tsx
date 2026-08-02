@@ -33,7 +33,7 @@ export function CameraRig() {
         snapshot.contactPressure * 0.055 +
         Math.min(snapshot.energy, 1) * 0.035,
     );
-    const targetZ = (lowTier ? 0.8 : 0.7) + deformation;
+    const targetZ = (lowTier ? 0.84 : 0.68) + deformation;
     const targetFov = lowTier ? 51 : 48;
 
     if (!initialized.current) {

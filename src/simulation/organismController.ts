@@ -54,7 +54,7 @@ export type OrganismSnapshot = Readonly<{
 }>;
 
 export const ORGANISM_RADIUS = 0.215;
-export const ORGANISM_MODEL_SCALE = 0.72;
+export const ORGANISM_MODEL_SCALE = 0.82;
 export const SURFACE_WAVE_LIFETIME = 4.5;
 
 const FIXED_STEP = 1 / 120;

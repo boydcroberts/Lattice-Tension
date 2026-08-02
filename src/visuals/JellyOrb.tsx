@@ -10,9 +10,9 @@ const REDUCED_MOTION_SCALE = 0.18;
 
 // Deliberately cool and low-luminance. The shader does the bright work through
 // wet highlights and bloom; these anchors keep the body from bleaching white.
-const DEEP = new Color("#05478d");
-const OCEAN = new Color("#18afea");
-const BABY_BLUE = new Color("#91e7ff");
+const DEEP = new Color("#07539d");
+const OCEAN = new Color("#1bb7ee");
+const BABY_BLUE = new Color("#a0ecff");
 const VIOLET = new Color("#7180ff");
 const STRETCH_CYAN = new Color("#20b8ea");
 const SQUISH_VIOLET = new Color("#6872e6");
@@ -102,15 +102,15 @@ export function JellyOrb() {
 
     uploadWaves(uniforms.ripple, snapshot);
 
-    uniforms.speed.value = 0.22 + energy * 0.2;
-    uniforms.tension.value = 0.34 + visualEnergy * 0.46 + visualResonance * 0.12;
-    uniforms.order.value = 0.18 + visualEnergy * 0.28 + visualResonance * 0.11;
+    uniforms.speed.value = 0.27 + energy * 0.22;
+    uniforms.tension.value = 0.39 + visualEnergy * 0.48 + visualResonance * 0.14;
+    uniforms.order.value = 0.22 + visualEnergy * 0.3 + visualResonance * 0.12;
     uniforms.pulse.value = Math.min(0.94, visualEnergy * 0.66 + visualResonance * 0.38);
     uniforms.resonance.value = visualResonance;
     uniforms.presence.value = 1;
     uniforms.collapseDistort.value = 0;
     uniforms.fringeRipple.value = visualEnergy * 0.045;
-    uniforms.lattice.value = 0.22 + visualEnergy * 0.24 + visualResonance * 0.1;
+    uniforms.lattice.value = 0.28 + visualEnergy * 0.27 + visualResonance * 0.12;
     uniforms.stretchColorStrength.value = stretchColorStrength;
     uniforms.squishColorStrength.value = squishColorStrength;
     uniforms.twistColorStrength.value = twistColorStrength;

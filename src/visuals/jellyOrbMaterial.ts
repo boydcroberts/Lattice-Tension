@@ -505,7 +505,7 @@ export function createJellyOrbMaterial(steps: number) {
         const deepBody = clearInterior
           .mul(transmit)
           .mul(float(0.88).add(diff.mul(0.5)).add(fill.mul(0.35)))
-          .add(mix(tint, accent, 0.58).mul(0.23)) // color floor → core glows, never black
+          .add(mix(tint, accent, 0.58).mul(0.26)) // color floor → core glows, never black
           .toVar();
         // subsurface scatter: a soft turquoise glow lit from within, peaking
         // through the mid-body and backlit limbs → tropical-water translucency
@@ -615,14 +615,14 @@ export function createJellyOrbMaterial(steps: number) {
           .mul(0.5)
           .add(0.5);
         const liquidVeil = smoothstep(0.34, 0.82, veilA.mul(veilB))
-          .mul(float(0.34).add(kineticEnergy.mul(0.22)))
+          .mul(float(0.4).add(kineticEnergy.mul(0.24)))
           .mul(float(0.52).add(fresnel.mul(0.48)));
         const waterGlow = mix(tint, accent, 0.62)
           .mul(liquidVeil)
-          .mul(float(0.9).add(tension.mul(0.42)));
+          .mul(float(1.02).add(tension.mul(0.44)));
         const interiorBloom = mix(tint, accent, 0.64)
           .mul(smoothstep(0.08, 0.94, thickness))
-          .mul(float(0.1).add(tension.mul(0.11)).add(kineticEnergy.mul(0.12)));
+          .mul(float(0.13).add(tension.mul(0.12)).add(kineticEnergy.mul(0.13)));
 
         // A slower, denser inner mass gives the glass something to contain. The
         // tilted boundary is driven by the same delayed slosh as the silhouette,
@@ -699,7 +699,7 @@ export function createJellyOrbMaterial(steps: number) {
         const innerLiquid = mix(tint, accent, float(0.3).add(liquidCurrent.mul(0.24)))
           .mul(liquidFill)
           .mul(
-            float(0.09)
+            float(0.11)
               .add(thickness.mul(0.2))
               .add(kineticEnergy.mul(0.22))
               .add(contactPressure.mul(0.16)),
@@ -741,7 +741,7 @@ export function createJellyOrbMaterial(steps: number) {
         const displacedCore = lp.add(slosh.mul(0.5));
         const coreLight = mix(tint, accent, 0.48)
           .mul(exp(length(displacedCore).mul(-3.4)))
-          .mul(float(0.095).add(kineticEnergy.mul(0.2)).add(resonance.mul(0.07)))
+          .mul(float(0.115).add(kineticEnergy.mul(0.2)).add(resonance.mul(0.07)))
           .mul(float(0.35).add(thickness.mul(0.65)));
         // soft-cap the accumulated glow so the web reads as filaments instead
         // of flooding the body with a flat saturated fill at high tension
